@@ -1,0 +1,4 @@
+#!/bin/sh
+export MEMODIS_DIR="$(cd $(dirname "$0"); pwd)"
+export PYTHONPATH="${PYTHONPATH}:.:${MEMODIS_DIR}"
+python ${MEMODIS_DIR}/memodis.py $*

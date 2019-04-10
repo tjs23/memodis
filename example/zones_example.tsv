@@ -1,0 +1,16 @@
+#type x_pos   y_pos  radius  group
+origin  149     604     100
+origin  375     604     100
+origin  259     416     100
+origin  499     400     100
+origin  606     597     100
+origin  384     208     100
+adjust  544     120     128
+adjust  651     321     128
+adjust  771     512     128
+roi     494     153      62     1
+roi     604     349      62     1
+roi     717     540      62     1
+roi     455     297      62     2
+roi     566     496      62     2
+
