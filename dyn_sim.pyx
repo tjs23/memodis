@@ -35,12 +35,12 @@ def dynamics_steps(ndarray[uint8_t, ndim=3] scene,
   px_lim = b-2
   py_lim = a-2
   
-  scene = scene.copy()
-  
+  scene = scene.copy() 
+
   for i in range(a):
     for j in range(b):
-      scene[i,j,0] = scene[i,j,:3].max() # Non-membrane zone
-  
+      scene[i,j,0] = max(scene[i,j,0], scene[i,j,1], scene[i,j,2]) # Non-membrane zone
+
   for i in range(a):
     for j in range(b):
       s = 0
@@ -69,7 +69,6 @@ def dynamics_steps(ndarray[uint8_t, ndim=3] scene,
         
       scene[i,j,2] = s # Adjascent membrane pixels which themselves have an edge
         
-  
   x_lim = <double>px_lim
   y_lim = <double>py_lim
   
@@ -79,6 +78,7 @@ def dynamics_steps(ndarray[uint8_t, ndim=3] scene,
     py0 = <int32_t>coords[i,0]
     px0 = <int32_t>coords[i,1]
     block_mask[py0,px0] += 1
+  
   
   # Main dynamics cycles
   
@@ -94,11 +94,11 @@ def dynamics_steps(ndarray[uint8_t, ndim=3] scene,
       
       py0 = <int32_t>coords[i,0]
       px0 = <int32_t>coords[i,1]
-      
-      p_accept = min((p_bind * n_free)/max(0.01, n_edge), 1.0)
 
       # unset prev block mask
       block_mask[py0,px0] -= 1
+      
+      p_accept = min((p_bind * n_free)/max(0.01, n_edge), 1.0)
 
       # Set different (un)binding for particles within zone radii
       for z in range(n_zones):
@@ -351,12 +351,9 @@ def dynamics_steps(ndarray[uint8_t, ndim=3] scene,
         
           coords[i,0] = y
           coords[i,1] = x
-
-        px0 = px
-        py0 = py
         
       # set blocking mask
-      block_mask[py0,px0] += 1
+      block_mask[<int32_t>coords[i,0],<int32_t>coords[i,1]] += 1
 
       # Analysis regions of interest for all cycles
       
@@ -374,7 +371,7 @@ def dynamics_steps(ndarray[uint8_t, ndim=3] scene,
     
     n_edge = n_edge0
     n_free = n_free0
-    
+
   return coords, region_counts
 
 
