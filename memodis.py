@@ -10,7 +10,6 @@ PROG_NAME = 'memodis'
 VERSION = '1.0.0'
 DESCRIPTION = 'A simple cellular membrane molecule diffusion simulator.'
 
-DFLT_N_PARTICLES = 1000
 DFLT_N_SAMPLES = 100
 DFLT_N_STEPS = 10000
 DFLT_TIMESTEP = 0.05
@@ -28,22 +27,9 @@ GRAD_RED   = [0.0, 0.2,  0.5, 0.0,  1.0]
 GRAD_GREEN = [0.0, 0.2,  0.0, 1.0,  1.0]
 GRAD_BLUE  = [0.0, 0.2,  0.5, 0.0,  0.0]  
 
-VALID_ZONES = ('origin','adjust','roi')
 IMG_FILTER = [[0.5, 1.0, 0.5],
               [1.0, 1.0, 1.0],
               [0.5, 1.0, 0.5]]
-# Input is 
-# - an image
-# - zones file
-#   + origin x, y, radius
-#   + adjust x, y, radius
-#   + roi x, y, radius, group
-
-# Output is
-# - an image
-# - and particle coords
-# - a counts table
-# - movie?
 
 NEWLINE_CHARS = 0
 
@@ -82,7 +68,7 @@ def info(msg, prefix='INFO', line_return=False):
   report('%s: %s' % (prefix, msg), line_return)
 
   
-def check_invalid_file(file_path, critical=True):
+def check_invalid_file(file_path):
   
   msg = ''
   
@@ -98,7 +84,7 @@ def check_invalid_file(file_path, critical=True):
   elif not os.access(file_path, os.R_OK):
     msg = 'File "%s" is not readable' % file_path
 
-  if msg and critical:
+  if msg:
     critical(msg)
   
   return msg
@@ -150,13 +136,11 @@ def test_imports():
     critical('MEMODIS cannot proceed because critical Python modules are not available')
     
     
-def _read_zone_file(zone_path):
+def _read_roi_file(file_path):
   
-  origins = []
-  adjusts = []
   rois = []
   
-  with open(zone_path) as file_obj:
+  with open(file_path) as file_obj:
     for line in file_obj:
       if line[0] == '#':
         continue
@@ -167,68 +151,38 @@ def _read_zone_file(zone_path):
       if not data:
         continue
         
-      key = data[0].lower()
+      if len(data) != 5:
+        critical('Region of interest lines must have 5 witespace-separate columns: x_pos, y_pos, radius, num_mem, group')
       
-      if key not in VALID_ZONES:
-        critical('Zone type in file %s must be "origin", "adjust" or "roi" not %s'% (zone_path, key))
+      try:
+        vals = [float(x) for x in data[0:4]] + [data[4]]
+                
+      except ValueError:
+        critical('Region of interest line "%s" values not interpretable' % line)
       
-      if key == 'origin':
-        if len(data) != 4:
-          critical('Zone origin lines must have 4 witespace-separate columns: "origin", x_pos, y_pos, radius')
-        
-        try:
-          vals = [float(x) for x in data[1:4]]        
-        except ValueError:
-          critical('Zone origin line "%s" values not interpretable' % line)
-        
-        origins.append(vals)
-        
-      elif key == 'adjust':
-        if len(data) != 4:
-          critical('Zone ajustment lines must have 4 witespace-separate columns: "adjust", x_pos, y_pos, radius ')
-        
-        try:
-          vals = [float(x) for x in data[1:4]]        
-        except ValueError:
-          critical('Zone ajustment line "%s" values not interpretable' % line)
-        
-        adjusts.append(vals)
-        
-      elif key == 'roi':
-        if len(data) != 6:
-          critical('Zone region of interest lines must have 5 witespace-separate columns: "roi", x_pos, y_pos, radius, num_mem, group')
-        
-        try:
-          vals = [float(x) for x in data[1:5]] + [data[5]]
-                  
-        except ValueError:
-          critical('Zone region of interest line "%s" values not interpretable' % line)
-        
-        rois.append(vals)
-        
-  if not origins:
-    critical('Zone file must specify at least one particle origin')
+      rois.append(vals)
 
-  if not adjusts:
-    warn('Zone file does not specifiy any (un)bining adjustment zomes')
-    
   if not rois:
-    warn('Zone file does not specify any regions of interest.')
+    warn('Regions file did not specify any regions.')
   
-  return origins, adjusts, rois
+  return rois
 
-
-def run_dynamics(bg_pixmap, coords, out_img_dir, monitor_regions, adjust_zones,
-                 n_particles, n_samples, n_steps, timestep, d_bound, d_free,
+def run_dynamics(scene_pixmap, coords, out_img_dir, monitor_regions,
+                 n_samples, n_steps, timestep, d_bound, d_free,
                  init_steps, k_on, alt_k_on, k_off, alt_k_off, max_occ,
-                 pixel_decay=0, pixel_width=2, free_color=(255, 0, 0), bound_color=(255, 255, 0)):
+                 pixel_decay=0, pixel_width=2, free_color=(255, 0, 0),
+                 bound_color=(255, 255, 0)):
   
   from dyn_sim import dynamics_steps, add_pixmap_particles
 
   n_coords = len(coords)
   
-  nz = bg_pixmap[:,:,:3].sum(axis=2) > 0
+  bg_pixmap = np.array(scene_pixmap)
   
+  origin_mask = (bg_pixmap[:,:,0] > 0) & (bg_pixmap[:,:,1] == 0) & (bg_pixmap[:,:,2] == 0)
+  bg_pixmap[origin_mask] = (0, 0, 0, 255)
+  
+  nz = bg_pixmap[:,:,:3].sum(axis=2) > 0
   bg_pixmap[nz] = (64, 64, 64, 255)
   pixmap = np.array(bg_pixmap)
   colors = np.array(free_color+bound_color, np.uint8)
@@ -257,7 +211,7 @@ def run_dynamics(bg_pixmap, coords, out_img_dir, monitor_regions, adjust_zones,
   # initial fast diffusion for faster convergence
   info('  .. pre-equilibriation with %d steps' % init_steps, line_return=True)
   particle_params = np.array([[10.0*sigma_free, 10.0*sigma_bound, p_bind, p_unbind, alt_p_bind, alt_p_unbind]] * n_coords) 
-  coords, region_counts = dynamics_steps(bg_pixmap, coords, particle_params, adjust_zones,
+  coords, region_counts = dynamics_steps(scene_pixmap, coords, particle_params,
                                          monitor_regions, init_steps, max_occ)
                                          
   if out_img_dir:
@@ -268,8 +222,8 @@ def run_dynamics(bg_pixmap, coords, out_img_dir, monitor_regions, adjust_zones,
   # Different particles could potentially be modelled differently
   info('  .. equilibriation with %d steps' % init_steps)
   particle_params = np.array([[sigma_free, sigma_bound, p_bind, p_unbind, alt_p_bind, alt_p_unbind]] * n_coords) 
-  coords, region_counts = dynamics_steps(bg_pixmap, coords, particle_params, adjust_zones,
-                                           monitor_regions, init_steps, max_occ)
+  coords, region_counts = dynamics_steps(scene_pixmap, coords, particle_params,
+                                         monitor_regions, init_steps, max_occ)
   
   if out_img_dir:
     add_pixmap_particles(pixmap, bg_pixmap, coords, colors, pixel_decay, pixel_width)
@@ -285,7 +239,7 @@ def run_dynamics(bg_pixmap, coords, out_img_dir, monitor_regions, adjust_zones,
     
     
     # region_counts # num_regions, 2 (free/bound)
-    coords, region_counts = dynamics_steps(bg_pixmap, coords, particle_params, adjust_zones,
+    coords, region_counts = dynamics_steps(scene_pixmap, coords, particle_params,
                                            monitor_regions, local_steps, max_occ)
      
     if out_img_dir:
@@ -310,10 +264,8 @@ def run_dynamics(bg_pixmap, coords, out_img_dir, monitor_regions, adjust_zones,
     info("  .. done %d of %d" % (j, n_steps), line_return=True)
   
   count_data = np.array(count_data)
-  #density = density[::-1,::-1]
   
   # Normalise and clip extrena
-  density -= density.min()
   density /= density.max()
   
   #density = np.clip(density, 0.01, 0.99)
@@ -324,7 +276,7 @@ def run_dynamics(bg_pixmap, coords, out_img_dir, monitor_regions, adjust_zones,
   
 
 
-def mem_mol_diff_sim(image_path, zone_path, out_dir, n_particles=DFLT_N_PARTICLES, n_samples=DFLT_N_SAMPLES,
+def mem_mol_diff_sim(image_path, regions_path, out_dir, n_samples=DFLT_N_SAMPLES,
                      n_steps=DFLT_N_STEPS, timestep=DFLT_TIMESTEP, d_bound=DFLT_D_BOUND, d_free=DFLT_D_FREE,
                      init_steps=DFLT_INIT_STEPS, k_on=DFLT_K_ON, alt_k_on=DFLT_ALT_K_ON,
                      k_off=DFLT_K_OFF, alt_k_off=DFLT_ALT_K_OFF, max_occ=DFLT_MAX_OCC, write_state_img=False):
@@ -333,14 +285,14 @@ def mem_mol_diff_sim(image_path, zone_path, out_dir, n_particles=DFLT_N_PARTICLE
   from numpy.random import uniform
   
   if os.path.exists(out_dir):
-    warn('Output directory %s exists. This may overwrite existing files.' % out_dir)
+    warn('Output directory "%s" exists. This may overwrite existing files.' % out_dir)
   else:
     os.mkdir(out_dir)
     
   check_invalid_file(image_path)
-  check_invalid_file(zone_path)
+  check_invalid_file(regions_path)
   
-  origins, adjusts, rois = _read_zone_file(zone_path)
+  rois = _read_roi_file(regions_path)
   
   out_count_file = os.path.join(out_dir, 'particle_counts.tsv')
   out_ratio_file = os.path.join(out_dir, 'region_bound_ratios.tsv')
@@ -354,8 +306,7 @@ def mem_mol_diff_sim(image_path, zone_path, out_dir, n_particles=DFLT_N_PARTICLE
       
   else:
     out_img_dir = None
-    
-  
+      
   try:
     #bg_pixmap = (imread(image_path) * 255).astype(np.uint8)
     bg_pixmap = imread(image_path)
@@ -364,32 +315,19 @@ def mem_mol_diff_sim(image_path, zone_path, out_dir, n_particles=DFLT_N_PARTICLE
     report(str(err), False)
     critical('Failed to load image file.')  
   
-  info('Running memodis on membrane image %s' % image_path)
-  info('Using zones %s' % zone_path)
-  info('Simulating %d particles per origin for %d steps' % (n_particles, n_steps))
+  info('Running memodis on membrane image "%s"' % image_path)
+  info('Using regions "%s"' % regions_path)
   
   # From origins
-  start_coords = np.empty((len(origins)*n_particles, 2), float)
-  h, w = bg_pixmap.shape[:2]
-  i = 0
-  for x0, y0, r in origins:
-    deltas = uniform(-r, r, (n_particles, 2))    
-    d2 = (deltas * deltas).sum(axis=1)    
-    invalid = (d2 > r*r).nonzero()[0]
-    
-    while len(invalid):
-      deltas[invalid] = uniform(-r, r, (len(invalid), 2))
-      d2 = (deltas * deltas).sum(axis=1)
-      invalid = (d2 > r*r).nonzero()[0]
-      
-    origin_coords = deltas + np.array([y0, x0])
-    
-    # Wrap around edges
-    origin_coords[:,0] = origin_coords[:,0] % h
-    origin_coords[:,1] = origin_coords[:,1] % w
-    
-    start_coords[i:i+n_particles] = origin_coords
-    i += n_particles
+  
+  origin_mask = (bg_pixmap[:,:,0] > 0) & (bg_pixmap[:,:,1] == 0) & (bg_pixmap[:,:,2] == 0) # Red, no green, no blue
+  rows, cols = origin_mask.nonzero()
+  
+  start_coords = np.array(zip(rows, cols), float)
+  n_particles = len(start_coords)
+  
+  if not n_particles:
+    critical('No particle origins (red pixels) founs in input image map.')  
   
   roi_groups = defaultdict(list)
   num_roi_mems = {}
@@ -400,14 +338,22 @@ def mem_mol_diff_sim(image_path, zone_path, out_dir, n_particles=DFLT_N_PARTICLE
     monitor_regions.append([x,y,r])
   
   monitor_regions = np.array(monitor_regions, float)
-    
-  adjust_zones = np.array(adjusts)
-  
+
+  info('Simulating %d particles for %d steps' % (n_particles, n_steps))
   density, coords, count_data = run_dynamics(bg_pixmap, start_coords, out_img_dir,
-                                             monitor_regions, adjust_zones,
-                                             n_particles, n_samples, n_steps, timestep,
+                                             monitor_regions, n_samples, n_steps, timestep,
                                              d_bound, d_free, init_steps,
                                              k_on, alt_k_on, k_off, alt_k_off, max_occ)
+  
+  membrane_mask = (bg_pixmap[:,:,0] == 0) & (bg_pixmap[:,:,1] == 0) & (bg_pixmap[:,:,2] == 0)
+  #membrane_mask[origin_mask] = False
+  
+  med = np.median(density[membrane_mask])
+  print med
+  
+  density /= 2.0 * med
+  density = np.clip(density, 0.0, 1.0)
+  
     
   red = np.interp(density, GRAD_STOPS, GRAD_RED)
   green = np.interp(density, GRAD_STOPS, GRAD_GREEN)
@@ -429,11 +375,10 @@ def mem_mol_diff_sim(image_path, zone_path, out_dir, n_particles=DFLT_N_PARTICLE
   
   
   # Write count data
-  #  - count_data isfor each zone, (bound, free)
+  #  - count_data is for each ROI, (bound, free)
   
   with open(out_count_file, 'w') as out_file_obj:
     write = out_file_obj.write
-
      
     for j, region in enumerate(monitor_regions):
       m = num_roi_mems[j]
@@ -447,7 +392,6 @@ def mem_mol_diff_sim(image_path, zone_path, out_dir, n_particles=DFLT_N_PARTICLE
       for i, (bound, free) in enumerate(count_data): # for each sample
         line = '%d\t%d\t%.3f\t%.3f\t%.3f\t%.3f\n'
         write(line % (j, i, bound[j], free[j], bound[j]/m, free[j]/m))
-
   
   # Write ratios
   # - average over all samples
@@ -501,27 +445,24 @@ def main(argv=None):
   if argv is None:
     argv = sys.argv[1:]
   
-  # 'Example use: ./memodis example/cell_boundaries.png example/zones_example.tsv -o example/ '
+  # 'Example use: ./memodis example/cell_boundaries.png example/regions_example.tsv -o example/ '
   
   epilog = 'For further help email tjs23@cam.ac.uk'
   
   arg_parse = ArgumentParser(prog=PROG_NAME, description=DESCRIPTION,
                              epilog=epilog, prefix_chars='-', add_help=True)
   
-  arg_parse.add_argument(metavar='IMAGE_FILE', dest='img',
+  arg_parse.add_argument(metavar='IMAGE_FILE', dest='in',
                          help='Cell membrane boundary pixmap image in PNG format (other formats may be usable if the PIL library is available).' \
                               ' Non-membrane/cytompasm areas must be perfectly black. Membrane pixels may be any other colour.')
   
-  arg_parse.add_argument(metavar='ZONE_FILE', dest='z',
-                         help='A white-space separated text file specifying circular zones for particle origins, (un)bining' \
-                              ' adjustments and monitored regions of interest. See the main GitHub README for a description of the file format.')
+  arg_parse.add_argument(metavar='REGIONS_FILE', dest='r',
+                         help='A white-space separated text file specifying circular monitored regions of interest. ' \
+                              'See the main GitHub README for a description of the file format.')
 
   arg_parse.add_argument('-o', metavar='OUT_DIR', dest='o', default='.',
                          help='Optional output directory for writing image and count data. Defaults to the current working directory.')
   
-  arg_parse.add_argument('-p', '--num-particles', default=DFLT_N_PARTICLES, metavar='NUM_PARTICLES', type=int, dest='p',
-                         help='The number of simulated particles for EACH origin zone, as specified in the zone file. Default: %d' % DFLT_N_PARTICLES)
-
   arg_parse.add_argument('-s', '--num_samples', default=DFLT_N_SAMPLES, metavar='NUM_SAMPLES', type=int, dest='s',
                          help='The number of points in the simulation to record particle positions,' \
                               ' after the initialization period. Default: %d' % DFLT_N_SAMPLES)
@@ -546,26 +487,25 @@ def main(argv=None):
                          help='The general membrane association constant, K_on. Default: %.4f' % DFLT_K_ON)
   
   arg_parse.add_argument('-a2', '--alt-k-on', default=DFLT_ALT_K_ON, metavar='ALT_ASSOC_CONST', type=float, dest='a2',
-                         help='The special membrane association constant, K_on, for adjusted zones. Default: %.4f' % DFLT_ALT_K_ON)
+                         help='The special membrane association constant, K_on, for adjusted (red) membranes. Default: %.4f' % DFLT_ALT_K_ON)
   
   arg_parse.add_argument('-d', '--k-off', default=DFLT_K_OFF, metavar='DISSOC_CONST', type=float, dest='d',
                          help='The general membrane dissociation constant, K_off. Default: %.4f' % DFLT_K_OFF)
 
   arg_parse.add_argument('-d2', '--alt-k-off', default=DFLT_ALT_K_OFF, metavar='ALT_DISSOC_CONST', type=float, dest='d2',
-                         help='The special membrane dissociation constant, K_off, for adjusted zones. Default: %.4f' % DFLT_ALT_K_OFF)
+                         help='The special membrane dissociation constant, K_off, for adjusted (red) membranes. Default: %.4f' % DFLT_ALT_K_OFF)
 
   arg_parse.add_argument('-m', '--max-occ', default=DFLT_MAX_OCC, metavar='MAX_OCCUPANCY', type=int, dest='m',
                          help='Maximum per-pixel particle occupancy at membrane. Default: %d' % DFLT_MAX_OCC)
 
-  arg_parse.add_argument('-w', default=False, action='store_true', dest="w",
-                         help='Write sampled states as separate images.')
+  arg_parse.add_argument('-img', '--write-images', default=False, action='store_true', dest="img",
+                         help='Write sampled states as separate images. Note this slows the simulation somewhat.')
   
   args = vars(arg_parse.parse_args(argv))
 
-  image_path = args['img']
-  zone_path = args['z']
+  image_path = args['in']
+  regions_path = args['r']
   out_dir = args['o']
-  n_particles = args['p']
   n_samples = args['s']
   n_steps = args['n']
   timestep = args['t']
@@ -577,9 +517,9 @@ def main(argv=None):
   k_off = args['d']
   alt_k_off = args['d2']
   max_occ = args['m']
-  write_state_img = args['w']
+  write_state_img = args['img']
                    
-  mem_mol_diff_sim(image_path, zone_path, out_dir, n_particles, n_samples, n_steps, timestep,
+  mem_mol_diff_sim(image_path, regions_path, out_dir, n_samples, n_steps, timestep,
                    d_bound, d_free, init_steps, k_on, alt_k_on, k_off, alt_k_off, max_occ, write_state_img)
   
 if __name__ == "__main__":
